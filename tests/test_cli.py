@@ -21,7 +21,11 @@ ENGLISH_CAPTIONS = json.dumps(
     }
 )
 KOREAN_CAPTIONS = json.dumps(
-    {"events": [{"tStartMs": 0, "dDurationMs": 2000, "segs": [{"utf8": "안녕하세요."}]}]}
+    {
+        "events": [
+            {"tStartMs": 0, "dDurationMs": 2000, "segs": [{"utf8": "Native Korean caption."}]}
+        ]
+    }
 )
 
 
@@ -77,7 +81,8 @@ class FakeTranslator:
     def translate(self, cues: Sequence[Cue], *, source_language: str, title: str) -> list[Cue]:
         self.calls.append((len(cues), source_language, title))
         return [
-            Cue(cue.start_milliseconds, cue.end_milliseconds, f"번역 {cue.text}") for cue in cues
+            Cue(cue.start_milliseconds, cue.end_milliseconds, f"translated {cue.text}")
+            for cue in cues
         ]
 
 
@@ -130,7 +135,7 @@ def test_translates_automatic_english_captions(tmp_path: Path) -> None:
     assert result.korean_subtitle_path == tmp_path / "Talk [abc].ko.srt"
     assert translator.calls == [(2, "en", "Talk")]
     korean = result.korean_subtitle_path.read_text(encoding="utf-8")
-    assert "번역 Hello there." in korean
+    assert "translated Hello there." in korean
     assert "Second sentence." in result.source_subtitle_path.read_text(encoding="utf-8")
 
 
@@ -147,7 +152,7 @@ def test_manual_korean_captions_skip_translation(tmp_path: Path) -> None:
     assert translator.calls == []
     assert result.video_path is None
     assert result.source_subtitle_path is None
-    assert "안녕하세요." in result.korean_subtitle_path.read_text(encoding="utf-8")
+    assert "Native Korean caption." in result.korean_subtitle_path.read_text(encoding="utf-8")
     assert downloader.downloaded == []
 
 
@@ -159,7 +164,7 @@ def test_without_captions_transcribes_downloaded_video(tmp_path: Path) -> None:
 
     assert transcriber.media == [tmp_path / "Talk [abc].mp4"]
     assert (tmp_path / "Talk [abc].mp4").exists()
-    assert "번역 Spoken words." in result.korean_subtitle_path.read_text(encoding="utf-8")
+    assert "translated Spoken words." in result.korean_subtitle_path.read_text(encoding="utf-8")
 
 
 def test_no_video_transcription_downloads_and_removes_audio(tmp_path: Path) -> None:
@@ -179,7 +184,7 @@ def test_force_transcription_ignores_captions(tmp_path: Path) -> None:
     downloader = FakeDownloader(
         tmp_path, information(manual={"en": caption_formats("en")}), {"en": ENGLISH_CAPTIONS}
     )
-    transcriber = FakeTranscriber([Cue(0, 1000, "안녕.")], language="ko")
+    transcriber = FakeTranscriber([Cue(0, 1000, "Korean speech.")], language="ko")
     translator = FakeTranslator()
 
     result = run(
@@ -188,7 +193,7 @@ def test_force_transcription_ignores_captions(tmp_path: Path) -> None:
     )
 
     assert translator.calls == []
-    assert "안녕." in result.korean_subtitle_path.read_text(encoding="utf-8")
+    assert "Korean speech." in result.korean_subtitle_path.read_text(encoding="utf-8")
 
 
 def test_empty_source_raises(tmp_path: Path) -> None:

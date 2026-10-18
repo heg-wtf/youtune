@@ -158,11 +158,11 @@ class TestMergeIntoSentences:
 
 class TestFormatSrt:
     def test_formats_numbered_blocks_with_hour_timestamps(self) -> None:
-        cues = [Cue(0, 1500, "첫 줄"), Cue(3_723_004, 3_725_000, "두 번째")]
+        cues = [Cue(0, 1500, "first line"), Cue(3_723_004, 3_725_000, "second line")]
 
         assert format_srt(cues) == (
-            "1\n00:00:00,000 --> 00:00:01,500\n첫 줄\n\n"
-            "2\n01:02:03,004 --> 01:02:05,000\n두 번째\n"
+            "1\n00:00:00,000 --> 00:00:01,500\nfirst line\n\n"
+            "2\n01:02:03,004 --> 01:02:05,000\nsecond line\n"
         )
 
     def test_trims_overlap_with_next_cue(self) -> None:
@@ -188,7 +188,9 @@ class TestFormatSrt:
 def test_write_srt_uses_utf8(tmp_path: Path) -> None:
     path = tmp_path / "video.ko.srt"
 
-    returned = write_srt([Cue(0, 1000, "안녕하세요")], path)
+    korean_text = "\uc548\ub155\ud558\uc138\uc694"  # "hello" in Korean, multi-byte UTF-8
+
+    returned = write_srt([Cue(0, 1000, korean_text)], path)
 
     assert returned == path
-    assert "안녕하세요" in path.read_text(encoding="utf-8")
+    assert korean_text in path.read_text(encoding="utf-8")

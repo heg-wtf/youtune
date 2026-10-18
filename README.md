@@ -1,91 +1,101 @@
 # youtune
 
-YouTube 영상을 내려받고 한국어 자막(`.ko.srt`)을 만드는 CLI.
+A CLI that downloads a YouTube video and generates Korean subtitles (`.ko.srt`).
 
 ```
-URL ─▶ yt-dlp 메타데이터 ─▶ 영상 다운로드(mp4)
-                      └─▶ 원문 자막(YouTube json3, 없으면 Whisper) ─▶ 문장 단위 병합
-                                                                   └─▶ Claude Code CLI 번역 ─▶ .ko.srt (─▶ mp4 임베드)
+URL ─▶ yt-dlp metadata ─▶ video download (mp4)
+                   └─▶ source captions (YouTube json3, Whisper if none) ─▶ sentence merging
+                                                                        └─▶ Claude Code CLI translation ─▶ .ko.srt (─▶ embed into mp4)
 ```
 
-## 요구 사항
+## Requirements
 
-| 도구 | 용도 | 설치 |
+| Tool | Purpose | Install |
 | --- | --- | --- |
-| Python 3.12+, [uv](https://docs.astral.sh/uv/) | 실행 환경 | `brew install uv` |
-| `ffmpeg` | 영상/음성 병합, 자막 임베드 | `brew install ffmpeg` |
-| `deno` | yt-dlp의 YouTube JS 챌린지 해석 | `brew install deno` |
-| `claude` (Claude Code) | 한국어 번역 | 설치 후 `claude` 로그인 |
+| Python 3.12+, [uv](https://docs.astral.sh/uv/) | Runtime | `brew install uv` |
+| `ffmpeg` | Merging video/audio, embedding subtitles | `brew install ffmpeg` |
+| `deno` | Solving YouTube JS challenges for yt-dlp | `brew install deno` |
+| `claude` (Claude Code) | Korean translation | Install, then log in with `claude` |
 
-## 설치
+## Installation
 
 ```bash
-make install                # uv sync
-make install-whisper        # (선택) 자막 없는 영상용 Whisper 음성 인식
+make install                         # uv sync (for development)
+make install-whisper                 # (optional) Whisper speech recognition for videos without captions
+uv tool install --editable .         # expose the `youtune` command globally
 ```
 
-## 사용법
+## Usage
 
 ```bash
-# 영상 + 한국어 자막
-uv run youtune "https://www.youtube.com/watch?v=PaPpyQocMww" -o downloads
+# Video + Korean subtitles
+youtune "https://www.youtube.com/watch?v=PaPpyQocMww" -o downloads
 
-# 자막을 mp4 안에 소프트 자막 트랙으로 넣기
-uv run youtune "<url>" -o downloads --embed
+# Embed the subtitles into the mp4 as a soft subtitle track
+youtune "<url>" -o downloads --embed
 
-# 자막만 (영상 다운로드 생략)
-uv run youtune "<url>" --no-video
+# Subtitles only (skip the video download)
+youtune "<url>" --no-video
 
-# Makefile 래퍼
+# Without a global install
+uv run youtune "<url>"
 make run URL="<url>" ARGS="--embed"
 ```
 
-### 출력
+### Output
 
-`<output-dir>/<제목> [<영상ID>]` 를 기준으로 다음 파일을 만든다.
+Files are written next to the base path `<output-dir>/<title> [<video id>]`.
+The output directory is created if it does not exist.
 
-| 파일 | 내용 |
+| File | Content |
 | --- | --- |
-| `….mp4` | 영상 (`--no-video`면 생략, `--embed`면 한국어 자막 트랙 포함) |
-| `….<원문언어>.srt` | 문장 단위로 정리한 원문 자막 (원문이 한국어면 생략) |
-| `….ko.srt` | 한국어 자막 |
+| `….mp4` | The video (skipped with `--no-video`; carries a Korean subtitle track with `--embed`) |
+| `….<source language>.srt` | Source captions merged into sentences (skipped when the source is Korean) |
+| `….ko.srt` | Korean subtitles |
 
-### 옵션
+### Options
 
-| 옵션 | 기본값 | 설명 |
+| Option | Default | Description |
 | --- | --- | --- |
-| `-o, --output-dir` | `.` | 출력 디렉터리 |
-| `--no-video` | off | 영상 다운로드 생략 |
-| `--embed` | off | 한국어 자막을 영상에 임베드 (mp4/m4v/mov/mkv) |
-| `--source-language` | 자동 감지 | 원문 언어 코드 (예: `en`) |
-| `--transcribe` | off | YouTube 자막을 무시하고 Whisper로 인식 |
-| `--whisper-model` | `small` | faster-whisper 모델 크기 |
-| `--model` | `sonnet` | 번역에 쓸 Claude 모델 (`sonnet`, `opus`, `haiku`, 전체 모델명) |
-| `--batch-size` | `40` | 번역 요청 1회당 문장 수 |
-| `--workers` | `4` | 병렬 번역 요청 수 |
-| `--format` | mp4 우선 | yt-dlp 포맷 셀렉터 |
-| `-v, --verbose` | off | 디버그 로그 |
+| `-o, --output-dir` | `.` | Output directory |
+| `--no-video` | off | Skip the video download |
+| `--embed` | off | Embed the Korean subtitles into the video (mp4/m4v/mov/mkv) |
+| `--source-language` | auto-detect | Source language code (e.g. `en`) |
+| `--transcribe` | off | Ignore YouTube captions and use Whisper |
+| `--whisper-model` | `small` | faster-whisper model size |
+| `--model` | `sonnet` | Claude model for translation (`sonnet`, `opus`, `haiku`, or a full model name) |
+| `--batch-size` | `40` | Lines per translation request |
+| `--workers` | `4` | Parallel translation requests |
+| `--format` | H.264 first | yt-dlp format selector |
+| `-v, --verbose` | off | Debug logs |
 
-종료 코드: `0` 성공, `1` 실행 오류, `2` 인자 오류, `130` 사용자 중단.
+Exit codes: `0` success, `1` runtime error, `2` invalid arguments, `130` interrupted.
 
-## 동작 방식
+## How it works
 
-1. **자막 선택** — 수동 한국어 자막 → (원문 언어) 수동 자막 → 자동 자막 `<lang>-orig` → 자동 자막 `<lang>` 순.
-   YouTube 자동 번역 트랙(`tlang=ko`)은 429 레이트 리밋이 잦아 쓰지 않는다. 자막이 없으면 Whisper로 폴백.
-2. **문장 병합** — 자동 자막의 단어 단위 타임스탬프를 구두점·휴지·길이 기준으로 문장 단위로 묶는다.
-   줄 단위 조각을 그대로 번역하면 어순이 다른 한국어가 어색해지기 때문.
-3. **번역** — `claude -p --json-schema` 헤드리스 호출. 배치마다 앞 문장 5개를 문맥으로 주고,
-   응답 인덱스가 어긋나면 최대 3회 재시도한다.
-4. **출력** — SRT 작성(겹침/최소 표시 시간 보정), `--embed`면 ffmpeg로 스트림 복사 임베드.
+1. **Caption selection** — manual Korean → manual captions in the source language → automatic
+   captions `<lang>-orig` → automatic captions `<lang>`. YouTube's machine-translated tracks
+   (`tlang=ko`) are skipped because they are heavily rate-limited (HTTP 429). Falls back to
+   Whisper when no captions exist.
+2. **Sentence merging** — the word-level timestamps of automatic captions are regrouped into
+   sentences by punctuation, pauses and length. Translating the raw line fragments produces
+   awkward Korean because the word order differs. Over-long sentences are split at the last
+   clause boundary, or near the middle, so no one-word tail is left behind.
+3. **Translation** — headless `claude -p --json-schema` calls. Each batch gets the five
+   preceding lines as context and is retried up to three times when the returned indexes do
+   not match. A line the model folds into the previous one extends that cue's display time.
+4. **Output** — SRT writing (overlap and minimum-duration fixes); with `--embed`, ffmpeg copies
+   the streams and adds the subtitles as the default track.
 
-번역은 사용자의 Claude Code 구독 사용량을 쓴다. 55분 영상(약 600문장) 기준 호출 15회 내외.
+Translation uses your Claude Code subscription quota. A 55-minute video (~700 sentences) takes
+about 18 calls.
 
-## 개발
+## Development
 
 ```bash
 make lint               # ruff format + ruff check + mypy --strict
-make test               # 단위 테스트
-make test-integration   # 실제 YouTube + claude CLI 통합 테스트
+make test               # unit tests
+make test-integration   # integration tests against real YouTube and the claude CLI
 ```
 
-구조는 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 참고.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the internal structure.

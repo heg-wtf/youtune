@@ -161,13 +161,13 @@ def test_gives_up_after_maximum_attempts(failure: Any) -> None:
 
 def test_reads_result_text_when_structured_output_missing() -> None:
     payload = {"subtype": "success", "is_error": False, "result": json.dumps(
-        {"translations": [{"index": 1, "text": "안녕"}]}
+        {"translations": [{"index": 1, "text": "translated hello"}]}
     )}  # fmt: skip
     runner = FakeRunner(completed(json.dumps(payload)))
 
     result = translator(runner).translate(cues(1), source_language="en", title="T")
 
-    assert result[0].text == "안녕"
+    assert result[0].text == "translated hello"
 
 
 def test_empty_translation_keeps_source_text() -> None:
@@ -183,27 +183,30 @@ def test_folded_line_extends_previous_cue(folded_text: str) -> None:
     runner = FakeRunner(
         success(
             [
-                {"index": 1, "text": "첫 줄과 둘째 줄을 합친 번역"},
+                {"index": 1, "text": "first and second lines combined"},
                 {"index": 2, "text": folded_text},
-                {"index": 3, "text": "셋째 줄"},
+                {"index": 3, "text": "third line"},
             ]
         )
     )
 
     result = translator(runner).translate(cues(3), source_language="en", title="T")
 
-    assert result == [Cue(0, 1900, "첫 줄과 둘째 줄을 합친 번역"), Cue(2000, 2900, "셋째 줄")]
+    assert result == [
+        Cue(0, 1900, "first and second lines combined"),
+        Cue(2000, 2900, "third line"),
+    ]
 
 
 def test_folding_works_across_batch_boundaries() -> None:
     runner = FakeRunner(
-        success([{"index": 1, "text": "하나"}, {"index": 2, "text": "둘"}]),
+        success([{"index": 1, "text": "one"}, {"index": 2, "text": "two"}]),
         success([{"index": 3, "text": ""}]),
     )
 
     result = translator(runner, batch_size=2).translate(cues(3), source_language="en", title="T")
 
-    assert result == [Cue(0, 900, "하나"), Cue(1000, 2900, "둘")]
+    assert result == [Cue(0, 900, "one"), Cue(1000, 2900, "two")]
 
 
 def test_prompt_allows_folding_but_forbids_echo() -> None:

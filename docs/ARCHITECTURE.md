@@ -1,38 +1,41 @@
 # Architecture
 
-## 모듈
+## Modules
 
-| 모듈 | 책임 | 외부 의존 |
+| Module | Responsibility | External dependency |
 | --- | --- | --- |
-| `cli.py` | 인자 파싱, 파이프라인 오케스트레이션(`run`), 에러 → 종료 코드 | — |
-| `downloader.py` | 메타데이터 조회, 자막 트랙 선택(`select_caption_track`), 자막/영상/음성 다운로드 | yt-dlp |
-| `subtitles.py` | `Cue` 모델, json3 파싱, 문장 병합, SRT 직렬화 | — |
-| `translator.py` | `claude -p` 배치 번역(병렬, 문맥, 스키마 검증, 재시도) | Claude Code CLI |
-| `transcriber.py` | faster-whisper 음성 인식 폴백 (optional extra) | faster-whisper |
-| `muxer.py` | ffmpeg로 SRT를 소프트 자막 트랙으로 임베드 | ffmpeg |
-| `errors.py` | `YoutuneError` 하위 도메인 예외 | — |
+| `cli.py` | Argument parsing, pipeline orchestration (`run`), errors → exit codes | — |
+| `downloader.py` | Metadata, caption track selection (`select_caption_track`), caption/video/audio downloads | yt-dlp |
+| `subtitles.py` | `Cue` model, json3 parsing, sentence merging, SRT serialization | — |
+| `translator.py` | Batched `claude -p` translation (parallel, context, schema validation, retries) | Claude Code CLI |
+| `transcriber.py` | faster-whisper speech recognition fallback (optional extra) | faster-whisper |
+| `muxer.py` | Embeds an SRT file as a soft subtitle track with ffmpeg | ffmpeg |
+| `errors.py` | Domain exceptions under `YoutuneError` | — |
 
-## 파이프라인
+## Pipeline
 
 ```
 cli.run
  ├─ downloader.fetch_information(url) ─────────────▶ VideoInformation
- ├─ downloader.download_video(video)   (옵션)      ─▶ <title> [<id>].mp4
- ├─ 원문 확보
+ ├─ downloader.download_video(video)   (optional)  ─▶ <title> [<id>].mp4
+ ├─ source subtitles
  │   ├─ select_caption_track ─▶ download_caption ─▶ parse_json3 ─▶ merge_into_sentences
- │   └─ (자막 없음 / --transcribe) transcriber.transcribe ─▶ merge_into_sentences
- ├─ 원문 ≠ 한국어 → write_srt(<lang>.srt) → translator.translate
+ │   └─ (no captions / --transcribe) transcriber.transcribe ─▶ merge_into_sentences
+ ├─ source ≠ Korean → write_srt(<lang>.srt) → translator.translate
  ├─ write_srt(ko.srt)
  └─ --embed → muxer.embed_subtitles
 ```
 
-`cli.run`은 `Downloader`/`Translator`/`Transcriber` 프로토콜에만 의존하므로 테스트에서 가짜 구현을 주입한다.
+`cli.run` depends only on the `Downloader` / `Translator` / `Transcriber` protocols, so tests
+inject fake implementations.
 
-## 데이터 구조
+## Data structures
 
-- `Cue(start_milliseconds, end_milliseconds, text)` — 불변 값 객체. 단어·줄·문장 단위 모두 같은 타입.
-- `VideoInformation` — yt-dlp info dict에서 필요한 필드(ID, 제목, 언어, 수동/자동 자막 표)와 원본(`raw`).
-- `CaptionTrack(language, is_automatic, url)` — 선택된 json3 자막 트랙.
+- `Cue(start_milliseconds, end_milliseconds, text)` — immutable value object used for words,
+  lines and sentences alike.
+- `VideoInformation` — the fields needed from the yt-dlp info dict (ID, title, language,
+  manual/automatic caption tables) plus the original dict (`raw`).
+- `CaptionTrack(language, is_automatic, url)` — the selected json3 caption track.
 
 ### YouTube json3
 
@@ -43,14 +46,28 @@ cli.run
 ]}
 ```
 
-- 자동 자막: 단어마다 `tOffsetMs` → 단어 단위 토큰. 단어 종료 시각 = min(다음 단어 시작, 이벤트 종료).
-- 수동 자막: 오프셋 없음 → 이벤트(줄) 단위 토큰.
-- 공백뿐인 세그먼트(`aAppend` 개행 이벤트)는 버린다.
+- Automatic captions: every word has a `tOffsetMs` → word-level tokens.
+  A word ends at min(next word start, event end).
+- Manual captions: no offsets → event (line) level tokens.
+- Whitespace-only segments (the `aAppend` newline events) are dropped.
 
-## 번역 세션 격리
+### Sentence merging
+
+A sentence closes at sentence punctuation, at a pause of 1.2 s or more, or at a clause
+terminator once it is at least 80 characters long. When the next token would push it past
+140 characters, it is split at the last clause terminator (keeping at least 40 characters in
+the head) or, if there is none, near the middle, so the end of a run-on sentence never becomes
+a one-word cue.
+
+## Translation session isolation
 
 `claude --print --tools "" --strict-mcp-config --disable-slash-commands --no-session-persistence --setting-sources "" --system-prompt … --json-schema …`
 
-- 도구·MCP·훅·설정·슬래시 커맨드를 모두 끈다 → 자막 속 프롬프트 인젝션이 번역 품질 외에 영향을 줄 수 없다.
-- 프롬프트는 stdin으로 전달(프로세스 목록 노출 방지), 임시 디렉터리를 cwd로 써 프로젝트 `CLAUDE.md`를 읽지 않는다.
-- `structured_output.translations[].index`가 요청 인덱스와 정확히 일치해야 채택한다.
+- Tools, MCP servers, hooks, settings and slash commands are all disabled, so prompt injection
+  inside captions can affect nothing but the translation itself.
+- The prompt is sent through stdin (not visible in the process list), and a temporary directory
+  is used as the working directory so no project `CLAUDE.md` is picked up.
+- A response is accepted only when `structured_output.translations[].index` exactly matches the
+  requested indexes.
+- An empty or punctuation-only translation means the model folded that line into the previous
+  one; the previous cue is extended over its time range.
