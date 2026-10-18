@@ -21,7 +21,7 @@ pytestmark = [
 ]
 
 VIDEO_URL = "https://www.youtube.com/watch?v=PaPpyQocMww"
-HANGUL = re.compile(r"[가-힣]")
+HANGUL = re.compile(r"[\uac00-\ud7a3]")
 
 
 def test_claude_cli_translates_into_korean() -> None:

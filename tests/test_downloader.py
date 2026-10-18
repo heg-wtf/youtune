@@ -211,12 +211,14 @@ class TestYoutubeDownloader:
             downloader.fetch_information("https://www.youtube.com/watch?v=gone")
 
     def test_download_caption_returns_decoded_text(self, tmp_path: Path) -> None:
-        recorder = ClientRecorder(payload='{"events": []} 한글'.encode())
+        # Multi-byte UTF-8 payload ("Hangul" written in Korean).
+        payload = '{"events": []} \ud55c\uae00'
+        recorder = ClientRecorder(payload=payload.encode())
         downloader = YoutubeDownloader(tmp_path, client_factory=recorder)
 
         content = downloader.download_caption(CaptionTrack("en", True, "https://captions/x"))
 
-        assert content == '{"events": []} 한글'
+        assert content == payload
 
     def test_download_caption_network_error(self, tmp_path: Path) -> None:
         recorder = ClientRecorder(error=OSError("connection reset"))

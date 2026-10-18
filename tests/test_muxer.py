@@ -30,7 +30,7 @@ def media(tmp_path: Path) -> tuple[Path, Path]:
     video = tmp_path / "-tricky [abc].mp4"
     subtitle = tmp_path / "-tricky [abc].ko.srt"
     video.write_bytes(b"original")
-    subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\n안녕\n", encoding="utf-8")
+    subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
     return video, subtitle
 
 
