@@ -1,4 +1,5 @@
 import sys
+import wave
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -66,3 +67,19 @@ def test_missing_faster_whisper_has_install_hint(monkeypatch: pytest.MonkeyPatch
 
     with pytest.raises(TranscriptionError, match="uv sync --extra whisper"):
         _load_whisper_model("tiny")
+
+
+def test_installed_faster_whisper_can_decode_audio(tmp_path: Path) -> None:
+    """Regression: PyAV 19 dropped av.open(metadata_errors=...), which faster-whisper passes."""
+    audio = pytest.importorskip("faster_whisper.audio")
+    sample_rate = 16_000
+    wav_path = tmp_path / "silence.wav"
+    with wave.open(str(wav_path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"\x00\x00" * (sample_rate // 2))
+
+    samples = audio.decode_audio(str(wav_path), sampling_rate=sample_rate)
+
+    assert len(samples) == pytest.approx(sample_rate // 2, abs=sample_rate // 100)
