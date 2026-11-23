@@ -10,6 +10,7 @@ from youtune.subtitles import (
     format_srt,
     merge_into_sentences,
     parse_json3,
+    parse_srt,
     write_srt,
 )
 
@@ -194,3 +195,32 @@ def test_write_srt_uses_utf8(tmp_path: Path) -> None:
 
     assert returned == path
     assert korean_text in path.read_text(encoding="utf-8")
+
+
+class TestParseSrt:
+    def test_round_trips_written_subtitles(self) -> None:
+        cues = [Cue(1_500, 3_250, "안녕하세요"), Cue(62_000, 64_000, "다음 줄")]
+
+        assert parse_srt(format_srt(cues)) == cues
+
+    def test_tolerates_bom_crlf_dots_and_short_fractions(self) -> None:
+        text = "\ufeff1\r\n00:00:01.5 --> 00:00:03,25\r\n첫 줄\r\n둘째 줄\r\n\r\n"
+
+        assert parse_srt(text) == [Cue(1_500, 3_250, "첫 줄 둘째 줄")]
+
+    def test_block_without_a_number_line(self) -> None:
+        assert parse_srt("00:00:01,000 --> 00:00:02,000\n텍스트\n") == [
+            Cue(1_000, 2_000, "텍스트")
+        ]
+
+    def test_drops_empty_cues_and_clamps_reversed_times(self) -> None:
+        text = "1\n00:00:05,000 --> 00:00:04,000\n뒤집힘\n\n2\n00:00:06,000 --> 00:00:07,000\n\n"
+
+        assert parse_srt(text) == [Cue(5_000, 5_000, "뒤집힘")]
+
+    def test_rejects_a_block_without_timing(self) -> None:
+        with pytest.raises(SubtitleParseError, match="invalid SRT block"):
+            parse_srt("1\nno timing here\n")
+
+    def test_empty_file_has_no_cues(self) -> None:
+        assert parse_srt("") == []

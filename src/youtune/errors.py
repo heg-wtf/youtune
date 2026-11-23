@@ -27,3 +27,19 @@ class TranscriptionError(YoutuneError):
 
 class MuxError(YoutuneError):
     """Embedding subtitles into the video container failed."""
+
+
+class MediaError(YoutuneError):
+    """ffmpeg / ffprobe is missing, or a media file could not be read."""
+
+
+class RenderError(YoutuneError):
+    """Rendering a video (burned subtitles or Shorts) failed."""
+
+
+class SpecificationError(YoutuneError):
+    """A Shorts specification or report manifest is invalid."""
+
+
+class FontNotFoundError(YoutuneError):
+    """No font that can draw Korean text was found."""

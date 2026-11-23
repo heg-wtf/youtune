@@ -18,6 +18,10 @@ MINIMUM_SPLIT_CHARACTERS = 40
 MINIMUM_CUE_MILLISECONDS = 500
 
 _WHITESPACE = re.compile(r"\s+")
+_SRT_TIMING = re.compile(
+    r"^\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*"
+    r"(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,3 +193,47 @@ def write_srt(cues: Sequence[Cue], path: Path) -> Path:
     """Write cues to ``path`` as UTF-8 SRT and return the path."""
     path.write_text(format_srt(cues), encoding="utf-8")
     return path
+
+
+def parse_srt(content: str) -> list[Cue]:
+    """Parse SRT text into cues; the lines of a multi-line cue are joined with a space.
+
+    Raises:
+        SubtitleParseError: A block has no valid timing line.
+    """
+    cues: list[Cue] = []
+    blocks = re.split(r"\n\s*\n", content.lstrip("\ufeff").replace("\r\n", "\n").strip())
+    for block in blocks:
+        lines = [line for line in block.split("\n") if line.strip()]
+        if not lines:
+            continue
+        found = next(
+            (
+                (index, match)
+                for index, line in enumerate(lines[:2])
+                if (match := _SRT_TIMING.match(line)) is not None
+            ),
+            None,
+        )
+        if found is None:
+            raise SubtitleParseError(f"invalid SRT block: {lines[0][:80]!r}")
+        timing_index, match = found
+        groups: tuple[str, ...] = match.groups()
+        start = _milliseconds(groups[:4])
+        end = _milliseconds(groups[4:])
+        text = _normalize(" ".join(lines[timing_index + 1 :]))
+        if text:
+            cues.append(Cue(start, max(end, start), text))
+    return cues
+
+
+def _milliseconds(parts: tuple[str, ...]) -> int:
+    """(hours, minutes, seconds, fraction) as matched; a fraction of 1-3 digits."""
+    hours, minutes, seconds, fraction = parts
+    total_seconds = (int(hours) * 60 + int(minutes)) * 60 + int(seconds)
+    return total_seconds * 1000 + int(fraction.ljust(3, "0"))
+
+
+def read_srt(path: Path) -> list[Cue]:
+    """Read an SRT file as UTF-8 and parse it."""
+    return parse_srt(path.read_text(encoding="utf-8"))

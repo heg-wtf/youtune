@@ -10,6 +10,15 @@
 | `translator.py` | Batched `claude -p` translation (parallel, context, schema validation, retries) | Claude Code CLI |
 | `transcriber.py` | faster-whisper speech recognition fallback (optional extra) | faster-whisper |
 | `muxer.py` | Embeds an SRT file as a soft subtitle track with ffmpeg | ffmpeg |
+| `commands.py` | The `analyze` / `frames` / `shorts` / `burn` / `report` subcommands | — |
+| `media.py` | ffprobe (`MediaInformation`), ffmpeg runner, output frame rate, encoders | ffmpeg |
+| `fonts.py`, `typography.py` | Korean font discovery; outlined text layers, wrapping, fitting | Pillow |
+| `image_track.py` | Timed still images as one `ffconcat` input (subtitle tracks) | ffmpeg |
+| `burn.py` | Hard subtitles: one PNG per cue in an image track, one `overlay` | ffmpeg, Pillow |
+| `shorts_spec.py` | The Shorts spec: dataclasses and validation with JSON paths | — |
+| `shorts.py` | 1080×1920 renderer: crop/pan, zoompan, freeze, concat, loudnorm, overlays | ffmpeg, Pillow |
+| `analyze.py` | Contact sheets, scene cuts, loudness peaks, transcript; exact frames | ffmpeg, Pillow |
+| `report.py` | Manifest validation and the self-contained HTML report | Pillow |
 | `errors.py` | Domain exceptions under `YoutuneError` | — |
 
 ## Pipeline
@@ -71,3 +80,24 @@ a one-word cue.
   requested indexes.
 - An empty or punctuation-only translation means the model folded that line into the previous
   one; the previous cue is extended over its time range.
+
+## Rendering
+
+The Homebrew ffmpeg has neither `drawtext` nor libass, so every piece of text is a PNG drawn
+by Pillow and composited with `overlay`.
+
+- **Subtitle tracks** (`image_track.py`): hundreds of cues as separate inputs do not scale, so
+  each cue is a same-size PNG listed in one `ffconcat` file with transparent blanks between
+  them (the last entry repeated, because the demuxer ignores the final duration). One input,
+  one `overlay`, frame-exact.
+- **Shorts** (`shorts.py`), per segment: `fps` to the output rate (the source's, halved until
+  ≤ 30) → `trim=end_frame` → `split` into a blurred background (square layout) and a
+  foreground `crop` that pans with the `center` keyframes → `tpad` clone for a freeze →
+  `zoompan` only when the segment zooms or shakes (a shake forces a small zoom so it has room)
+  → `settb`/`setpts=N` on every picture layer. Audio: `atrim=end_sample` + `apad` to the
+  segment's exact length. Segments are concatenated, `loudnorm` to −14 LUFS, then title,
+  labels, the subtitle track, pop sequences and flash sequences are overlaid. Pop and flash
+  sequences start after `tpad=start=<frames>`.
+- Three timing rules found while making Shorts by hand keep overlays on the right frame:
+  `trim=end_frame` instead of a duration, one frame grid on both picture layers, and pop /
+  flash offsets in whole frames.
