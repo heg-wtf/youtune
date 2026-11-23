@@ -7,7 +7,8 @@ requires-python = ">=3.12"
 dependencies = ["yt-dlp[default]>=2026.8.19"]
 
 [project.optional-dependencies]
-whisper = ["faster-whisper>=1.2.1"]
+# PyAV 19 removed av.open(metadata_errors=...), which faster-whisper 1.2.1 still passes.
+whisper = ["faster-whisper>=1.2.1", "av<19"]
 
 [project.scripts]
 youtune = "youtune.cli:main"
