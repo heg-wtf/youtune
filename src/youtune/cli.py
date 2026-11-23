@@ -1,6 +1,7 @@
 """Command line entry point: download a YouTube video and write Korean subtitles."""
 
 import argparse
+import json
 import logging
 import sys
 from collections.abc import Sequence
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
 
+from youtune import commands
+from youtune.burn import burn_subtitles
 from youtune.downloader import (
     DEFAULT_VIDEO_FORMAT,
     KOREAN,
@@ -52,6 +55,7 @@ class Options:
     should_embed: bool
     should_force_transcription: bool
     source_language: str | None
+    should_burn: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +69,7 @@ class Components:
 class SourceSubtitles:
     cues: list[Cue]
     language: str
+    kind: str  # "manual", "automatic" or "whisper"
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +77,29 @@ class RunResult:
     video_path: Path | None
     korean_subtitle_path: Path
     source_subtitle_path: Path | None
+    video: VideoInformation | None = None
+    source_language: str | None = None
+    caption_kind: str | None = None
+    burned_video_path: Path | None = None
+
+    def to_dictionary(self) -> dict[str, object]:
+        """What ``--json`` prints: the files written and what they came from."""
+        video = self.video
+        return {
+            "url": video.url if video else None,
+            "identifier": video.identifier if video else None,
+            "title": video.title if video else None,
+            "channel": video.channel if video else None,
+            "duration_seconds": video.duration_seconds if video else None,
+            "source_language": self.source_language,
+            "caption_kind": self.caption_kind,
+            "video": str(self.video_path) if self.video_path else None,
+            "burned_video": str(self.burned_video_path) if self.burned_video_path else None,
+            "korean_subtitles": str(self.korean_subtitle_path),
+            "source_subtitles": str(self.source_subtitle_path)
+            if self.source_subtitle_path
+            else None,
+        }
 
 
 def run(options: Options, components: Components) -> RunResult:
@@ -95,10 +123,24 @@ def run(options: Options, components: Components) -> RunResult:
         )
     korean_subtitle_path = write_srt(korean_cues, _subtitle_path(base_path, KOREAN))
 
+    burned_video_path = None
+    if options.should_burn and video_path is not None:
+        logger.info("Burning Korean subtitles into a copy of %s", video_path.name)
+        burned_video_path = burn_subtitles(
+            video_path, korean_subtitle_path, base_path.with_name(f"{base_path.name}.ko.mp4")
+        )
     if options.should_embed and video_path is not None:
         logger.info("Embedding Korean subtitles into %s", video_path.name)
         embed_subtitles(video_path, korean_subtitle_path)
-    return RunResult(video_path, korean_subtitle_path, source_subtitle_path)
+    return RunResult(
+        video_path,
+        korean_subtitle_path,
+        source_subtitle_path,
+        video=video,
+        source_language=source.language,
+        caption_kind=source.kind,
+        burned_video_path=burned_video_path,
+    )
 
 
 def _obtain_source(
@@ -116,7 +158,7 @@ def _obtain_source(
             kind = "automatic" if track.is_automatic else "manual"
             logger.info("Using %s '%s' captions", kind, track.language)
             content = components.downloader.download_caption(track)
-            return _non_empty(merge_into_sentences(parse_json3(content)), track.language)
+            return _non_empty(merge_into_sentences(parse_json3(content)), track.language, kind)
     return _transcribe(options, components, video, video_path)
 
 
@@ -134,13 +176,13 @@ def _transcribe(
     finally:
         if video_path is None:
             media_path.unlink(missing_ok=True)
-    return _non_empty(merge_into_sentences(transcript.cues), transcript.language)
+    return _non_empty(merge_into_sentences(transcript.cues), transcript.language, "whisper")
 
 
-def _non_empty(cues: list[Cue], language: str) -> SourceSubtitles:
+def _non_empty(cues: list[Cue], language: str, kind: str) -> SourceSubtitles:
     if not cues:
         raise CaptionNotFoundError("no speech or caption text found in the video")
-    return SourceSubtitles(cues, language.split("-")[0].lower())
+    return SourceSubtitles(cues, language.split("-")[0].lower(), kind)
 
 
 def _subtitle_path(base_path: Path, language: str) -> Path:
@@ -165,6 +207,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="youtune",
         description="Download a YouTube video and generate Korean subtitles (.ko.srt).",
+        epilog=(
+            "Work on the downloaded files with: youtune {analyze,frames,shorts,burn,report} "
+            "(see `youtune <command> --help`)."
+        ),
     )
     parser.add_argument("url", type=_url, help="YouTube video URL")
     parser.add_argument(
@@ -176,6 +222,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--embed", action="store_true", help="embed the Korean subtitles into the video file"
     )
+    parser.add_argument(
+        "--burn",
+        action="store_true",
+        help="also write <title> [<id>].ko.mp4 with the Korean subtitles burned in",
+    )
+    parser.add_argument("--json", action="store_true", help="print the result as JSON on stdout")
     parser.add_argument(
         "--source-language", help="source language code, e.g. en (default: detect)"
     )
@@ -202,16 +254,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    argument_list = list(sys.argv[1:] if argv is None else argv)
+    if argument_list and argument_list[0] in commands.SUBCOMMANDS:
+        return _run_subcommand(argument_list)
     parser = build_parser()
-    arguments = parser.parse_args(argv)
-    if arguments.no_video and arguments.embed:
-        parser.error("--embed requires the video; drop --no-video")
+    arguments = parser.parse_args(argument_list)
+    if arguments.no_video and (arguments.embed or arguments.burn):
+        parser.error("--embed and --burn need the video; drop --no-video")
 
-    logging.basicConfig(
-        level=logging.DEBUG if arguments.verbose else logging.INFO,
-        format="%(message)s",
-        stream=sys.stderr,
-    )
+    _configure_logging(verbose=arguments.verbose)
     options = Options(
         url=arguments.url,
         output_directory=arguments.output_dir,
@@ -219,6 +270,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         should_embed=arguments.embed,
         should_force_transcription=arguments.transcribe,
         source_language=arguments.source_language,
+        should_burn=arguments.burn,
     )
     components = Components(
         downloader=YoutubeDownloader(arguments.output_dir, video_format=arguments.format),
@@ -245,9 +297,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.error("interrupted")
         return 130
 
+    if arguments.json:
+        print(json.dumps(result.to_dictionary(), ensure_ascii=False, indent=2))
+        return 0
     if result.video_path is not None:
         print(f"video: {result.video_path}")
+    if result.burned_video_path is not None:
+        print(f"burned video: {result.burned_video_path}")
     if result.source_subtitle_path is not None:
         print(f"source subtitles: {result.source_subtitle_path}")
     print(f"korean subtitles: {result.korean_subtitle_path}")
+    return 0
+
+
+def _configure_logging(*, verbose: bool) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(message)s",
+        stream=sys.stderr,
+    )
+
+
+def _run_subcommand(argument_list: list[str]) -> int:
+    arguments = commands.parse(argument_list)
+    _configure_logging(verbose=arguments.verbose)
+    try:
+        commands.run(arguments)
+    except YoutuneError as error:
+        logger.error("error: %s", error)
+        return 1
+    except OSError as error:
+        logger.error("error: %s", error)
+        return 1
+    except KeyboardInterrupt:
+        logger.error("interrupted")
+        return 130
     return 0

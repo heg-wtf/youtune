@@ -50,6 +50,16 @@ class VideoInformation:
     automatic_captions: CaptionTable
     raw: InformationDictionary = field(repr=False)
 
+    @property
+    def channel(self) -> str | None:
+        value = self.raw.get("channel") or self.raw.get("uploader")
+        return str(value) if value else None
+
+    @property
+    def duration_seconds(self) -> float | None:
+        value = self.raw.get("duration")
+        return float(value) if isinstance(value, int | float) else None
+
 
 @dataclass(frozen=True, slots=True)
 class CaptionTrack:
@@ -199,6 +209,8 @@ class YoutubeDownloader:
             "outtmpl": {"default": str(self.output_directory / OUTPUT_TEMPLATE)},
             "noplaylist": True,
             "quiet": True,
+            # Progress and messages go to stderr: stdout carries only results (--json).
+            "logtostderr": True,
             "no_warnings": False,
             **overrides,
         }
