@@ -22,7 +22,15 @@ from youtune.downloader import (
 )
 from youtune.errors import CaptionNotFoundError, YoutuneError
 from youtune.muxer import embed_subtitles
-from youtune.subtitles import Cue, merge_into_sentences, parse_json3, write_srt
+from youtune.subtitles import (
+    DISPLAY_LIMITS,
+    TRANSLATION_LIMITS,
+    Cue,
+    MergeLimits,
+    merge_into_sentences,
+    parse_json3,
+    write_srt,
+)
 from youtune.transcriber import Transcript, WhisperTranscriber
 from youtune.translator import ClaudeCodeTranslator, TranslatorSettings
 
@@ -158,7 +166,7 @@ def _obtain_source(
             kind = "automatic" if track.is_automatic else "manual"
             logger.info("Using %s '%s' captions", kind, track.language)
             content = components.downloader.download_caption(track)
-            return _non_empty(merge_into_sentences(parse_json3(content)), track.language, kind)
+            return _merged_source(parse_json3(content), track.language, kind)
     return _transcribe(options, components, video, video_path)
 
 
@@ -176,13 +184,20 @@ def _transcribe(
     finally:
         if video_path is None:
             media_path.unlink(missing_ok=True)
-    return _non_empty(merge_into_sentences(transcript.cues), transcript.language, "whisper")
+    return _merged_source(transcript.cues, transcript.language, "whisper")
 
 
-def _non_empty(cues: list[Cue], language: str, kind: str) -> SourceSubtitles:
+def _merged_source(tokens: Sequence[Cue], language: str, kind: str) -> SourceSubtitles:
+    base_language = language.split("-")[0].lower()
+    cues = merge_into_sentences(tokens, merge_limits(base_language))
     if not cues:
         raise CaptionNotFoundError("no speech or caption text found in the video")
-    return SourceSubtitles(cues, language.split("-")[0].lower(), kind)
+    return SourceSubtitles(cues, base_language, kind)
+
+
+def merge_limits(language: str) -> MergeLimits:
+    """Korean source text is shown as is (display-sized cues); other text is translated."""
+    return DISPLAY_LIMITS if language == KOREAN else TRANSLATION_LIMITS
 
 
 def _subtitle_path(base_path: Path, language: str) -> Path:

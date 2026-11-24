@@ -62,11 +62,38 @@ inject fake implementations.
 
 ### Sentence merging
 
-A sentence closes at sentence punctuation, at a pause of 1.2 s or more, or at a clause
-terminator once it is at least 80 characters long. When the next token would push it past
-140 characters, it is split at the last clause terminator (keeping at least 40 characters in
-the head) or, if there is none, near the middle, so the end of a run-on sentence never becomes
-a one-word cue.
+`merge_into_sentences(tokens, limits)` takes one of two `MergeLimits` sets, chosen by the
+source language (`cli.merge_limits`):
+
+| | `TRANSLATION_LIMITS` (source is translated) | `DISPLAY_LIMITS` (Korean source, shown as is) |
+| --- | --- | --- |
+| Close at a clause once | 80 characters | 20 characters |
+| Close at a pause of | 1.2 s | 0.7 s |
+| Split before passing | 140 characters | 42 characters (about two lines) |
+| Keep in a clause-split head | 40 characters | 12 characters |
+| Split before lasting longer than | 10 s | 7 s |
+
+A cue also closes at sentence punctuation. When the next token would push it past either
+split limit, it is split at the last clause terminator that leaves a sizeable head or,
+if there is none, at the widest pause between its tokens (nearest the middle among equal
+pauses; while some cut leaves both parts at least the clause-split minimum long, only those
+cuts count), so the end of a run-on sentence never becomes a one-word cue. A single token longer than the
+duration limit (a Whisper segment without word timings) stays one cue. A duration overflow
+is split rather than closed where it stands: closing there left stubs such as
+"using agents." behind.
+
+The translation limits suit English: Korean translations come out about half as long.
+Korean shown as it is needs display-sized cues, and Korean speech gives the merger little to
+work with — Whisper output has almost no punctuation and its segments are contiguous — so
+the display set relies on word timings, short pauses and the 42-character split.
+
+### Whisper word timings
+
+`WhisperTranscriber` asks faster-whisper for word timestamps (`word_timestamps=True`) and
+returns one cue per word; a segment without aligned words becomes one cue. A segment's own
+timing spans the silences inside it (one lasted 21 s), word timings do not. The first cue of
+every segment starts with a space, because a segment boundary is a word boundary and the
+merger joins cue texts as they are.
 
 ## Translation session isolation
 

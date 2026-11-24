@@ -11,10 +11,6 @@ from youtune.errors import SubtitleParseError
 
 SENTENCE_TERMINATORS = (".", "?", "!", "…", "。", "？", "！")  # noqa: RUF001 - full-width CJK punctuation
 CLAUSE_TERMINATORS = (",", ";", ":", "，", "、")  # noqa: RUF001 - full-width CJK punctuation
-PAUSE_BREAK_MILLISECONDS = 1200
-SOFT_CHARACTER_LIMIT = 80
-HARD_CHARACTER_LIMIT = 140
-MINIMUM_SPLIT_CHARACTERS = 40
 MINIMUM_CUE_MILLISECONDS = 500
 
 _WHITESPACE = re.compile(r"\s+")
@@ -31,6 +27,41 @@ class Cue:
     start_milliseconds: int
     end_milliseconds: int
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class MergeLimits:
+    """When a merged cue closes and how far it may grow.
+
+    A cue closes at sentence punctuation, at a pause of ``pause_milliseconds`` or more, or at a
+    clause terminator once it has ``soft_characters``. Before a token would take it past
+    ``hard_characters`` or ``maximum_milliseconds``, it is split; a split at a clause keeps at
+    least ``minimum_split_characters`` in the head.
+    """
+
+    soft_characters: int
+    hard_characters: int
+    minimum_split_characters: int
+    pause_milliseconds: int
+    maximum_milliseconds: int
+
+
+# Sentences that are translated afterwards; the Korean comes out about half as long.
+TRANSLATION_LIMITS = MergeLimits(
+    soft_characters=80,
+    hard_characters=140,
+    minimum_split_characters=40,
+    pause_milliseconds=1200,
+    maximum_milliseconds=10_000,
+)
+# Text shown as it is (Korean speech or Korean captions): about two lines of 20 characters.
+DISPLAY_LIMITS = MergeLimits(
+    soft_characters=20,
+    hard_characters=42,
+    minimum_split_characters=12,
+    pause_milliseconds=700,
+    maximum_milliseconds=7000,
+)
 
 
 def parse_json3(content: str) -> list[Cue]:
@@ -82,22 +113,24 @@ def _token_end(start: int, event_end: int, next_start: int | None) -> int:
     return max(min(event_end, next_start), start)
 
 
-def merge_into_sentences(tokens: Sequence[Cue]) -> list[Cue]:
+def merge_into_sentences(
+    tokens: Sequence[Cue], limits: MergeLimits = TRANSLATION_LIMITS
+) -> list[Cue]:
     """Merge word- or line-level cues into sentence-sized cues.
 
     A cue closes at sentence punctuation, at a long pause, or after a clause
     once it is reasonably long. When a token would push a cue past the hard
-    length limit, the cue is split so that the sentence does not leave a
-    one-word tail behind.
+    length limit or the maximum duration, the cue is split so that the sentence
+    does not leave a one-word tail behind.
     """
     sentences: list[Cue] = []
     buffer: list[Cue] = []
     for token, next_token in zip(tokens, _followers(tokens), strict=True):
-        if buffer and len(_joined_text([*buffer, token])) > HARD_CHARACTER_LIMIT:
-            head, buffer = _split_for_limit(buffer)
+        while buffer and _would_overflow(buffer, token, limits):
+            head, buffer = _split_for_limit(buffer, limits)
             sentences.append(_join(head))
         buffer.append(token)
-        if _should_close(buffer, next_token):
+        if _should_close(buffer, next_token, limits):
             sentences.append(_join(buffer))
             buffer = []
     return [sentence for sentence in sentences if sentence.text]
@@ -111,39 +144,68 @@ def _followers(cues: Sequence[Cue]) -> list[Cue | None]:
     return followers
 
 
-def _split_for_limit(buffer: list[Cue]) -> tuple[list[Cue], list[Cue]]:
+def _would_overflow(buffer: list[Cue], token: Cue, limits: MergeLimits) -> bool:
+    # Closing the whole cue at the duration limit left stubs such as "using agents."
+    # behind, so a cue that would last too long is split the same way as one too long.
+    duration = token.end_milliseconds - buffer[0].start_milliseconds
+    return (
+        len(_joined_text([*buffer, token])) > limits.hard_characters
+        or duration > limits.maximum_milliseconds
+    )
+
+
+def _split_for_limit(buffer: list[Cue], limits: MergeLimits) -> tuple[list[Cue], list[Cue]]:
     """Split an over-long buffer into a finished head and a tail that keeps growing.
 
     Prefers the last clause terminator that leaves a sizeable head. Without one,
-    cuts near the middle so the end of a run-on sentence never becomes a stub.
+    cuts at the widest pause between tokens, so the end of a run-on sentence
+    never becomes a stub.
     """
     for position in range(len(buffer) - 1, 0, -1):
         if not buffer[position - 1].text.strip().endswith(CLAUSE_TERMINATORS):
             continue
-        if len(_joined_text(buffer[:position])) >= MINIMUM_SPLIT_CHARACTERS:
+        if len(_joined_text(buffer[:position])) >= limits.minimum_split_characters:
             return buffer[:position], buffer[position:]
-
-    half = len(_joined_text(buffer)) / 2
-    position = min(
-        range(1, len(buffer)),
-        key=lambda candidate: abs(len(_joined_text(buffer[:candidate])) - half),
-        default=len(buffer),
-    )
+    position = _widest_gap_position(buffer, limits)
     return buffer[:position], buffer[position:]
 
 
-def _should_close(buffer: list[Cue], next_token: Cue | None) -> bool:
+def _widest_gap_position(buffer: list[Cue], limits: MergeLimits) -> int:
+    """The token index after the widest pause, nearest the middle among equal pauses.
+
+    Only cuts that leave both parts ``minimum_split_characters`` long are
+    considered while there are any; a single-token buffer is returned whole.
+    """
+    positions = list(range(1, len(buffer)))
+    if not positions:
+        return len(buffer)
+    heads = {position: len(_joined_text(buffer[:position])) for position in positions}
+    tails = {position: len(_joined_text(buffer[position:])) for position in positions}
+    balanced = [
+        position
+        for position in positions
+        if min(heads[position], tails[position]) >= limits.minimum_split_characters
+    ]
+
+    def preference(position: int) -> tuple[int, int]:
+        gap = buffer[position].start_milliseconds - buffer[position - 1].end_milliseconds
+        return gap, -abs(heads[position] - tails[position])
+
+    return max(balanced or positions, key=preference)
+
+
+def _should_close(buffer: list[Cue], next_token: Cue | None, limits: MergeLimits) -> bool:
     if next_token is None:
         return True
     last_text = buffer[-1].text.strip()
     is_pause = (
-        next_token.start_milliseconds - buffer[-1].end_milliseconds >= PAUSE_BREAK_MILLISECONDS
+        next_token.start_milliseconds - buffer[-1].end_milliseconds >= limits.pause_milliseconds
     )
     return (
         last_text.endswith(SENTENCE_TERMINATORS)
         or is_pause
         or (
-            len(_joined_text(buffer)) >= SOFT_CHARACTER_LIMIT
+            len(_joined_text(buffer)) >= limits.soft_characters
             and last_text.endswith(CLAUSE_TERMINATORS)
         )
     )
