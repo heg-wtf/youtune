@@ -18,7 +18,7 @@ type ModelFactory = Callable[[str], Any]
 
 @dataclass(frozen=True, slots=True)
 class Transcript:
-    """Recognized speech with the detected (or forced) language."""
+    """Recognized speech as word- or segment-level cues, with the detected (or forced) language."""
 
     cues: list[Cue]
     language: str
@@ -51,13 +51,35 @@ class WhisperTranscriber:
         logger.info("Transcribing %s with Whisper (%s)", media_path.name, self.model_size)
         try:
             segments, information = model.transcribe(
-                str(media_path), language=language, vad_filter=True
+                str(media_path), language=language, vad_filter=True, word_timestamps=True
             )
-            cues = [
-                Cue(round(segment.start * 1000), round(segment.end * 1000), segment.text.strip())
-                for segment in segments
-                if segment.text.strip()
-            ]
+            cues = [cue for segment in segments for cue in segment_cues(segment)]
         except (RuntimeError, ValueError, OSError) as error:
             raise TranscriptionError(f"Whisper failed on {media_path.name}: {error}") from error
         return Transcript(cues, information.language)
+
+
+def segment_cues(segment: Any) -> list[Cue]:
+    """Word-level cues when Whisper aligned the words, else one cue for the whole segment.
+
+    A segment's timing spans the silences inside it, so words time a cue far better. The
+    first cue of a segment always starts with a space: a segment boundary is a word boundary,
+    and merging joins cue texts as they are.
+    """
+    words = [word for word in getattr(segment, "words", None) or [] if word.word.strip()]
+    if not words:
+        text = segment.text.strip()
+        return (
+            [Cue(_milliseconds(segment.start), _milliseconds(segment.end), f" {text}")]
+            if text
+            else []
+        )
+    cues = [Cue(_milliseconds(word.start), _milliseconds(word.end), word.word) for word in words]
+    first = cues[0]
+    if not first.text[0].isspace():
+        cues[0] = Cue(first.start_milliseconds, first.end_milliseconds, f" {first.text}")
+    return cues
+
+
+def _milliseconds(seconds: float) -> int:
+    return round(seconds * 1000)

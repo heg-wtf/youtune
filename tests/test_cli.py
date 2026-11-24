@@ -9,7 +9,7 @@ from youtune import cli
 from youtune.cli import Components, Options, run
 from youtune.downloader import CaptionTrack, VideoInformation
 from youtune.errors import CaptionNotFoundError, DownloadError
-from youtune.subtitles import Cue
+from youtune.subtitles import DISPLAY_LIMITS, TRANSLATION_LIMITS, Cue, MergeLimits, read_srt
 from youtune.transcriber import Transcript
 
 ENGLISH_CAPTIONS = json.dumps(
@@ -194,6 +194,62 @@ def test_force_transcription_ignores_captions(tmp_path: Path) -> None:
 
     assert translator.calls == []
     assert "Korean speech." in result.korean_subtitle_path.read_text(encoding="utf-8")
+
+
+def spoken_words(text: str, count: int) -> list[Cue]:
+    """Contiguous unpunctuated word cues, the way Korean Whisper output arrives."""
+    return [Cue(index * 300, index * 300 + 300, f" {text}") for index in range(count)]
+
+
+def test_korean_speech_is_cut_to_display_size(tmp_path: Path) -> None:
+    downloader = FakeDownloader(tmp_path, information(), {})
+    transcriber = FakeTranscriber(spoken_words("그래서우리가", 20), language="ko")
+
+    result = run(options(tmp_path), components(downloader, transcriber=transcriber))
+
+    lines = cue_texts(result.korean_subtitle_path)
+    assert len(lines) > 1
+    assert all(len(line) <= DISPLAY_LIMITS.hard_characters for line in lines)
+
+
+def test_speech_to_translate_keeps_sentence_size(tmp_path: Path) -> None:
+    downloader = FakeDownloader(tmp_path, information(), {})
+    transcriber = FakeTranscriber(spoken_words("because", 15), language="en")
+    translator = FakeTranslator()
+
+    run(options(tmp_path), components(downloader, translator, transcriber))
+
+    assert translator.calls == [(1, "en", "Talk")]
+
+
+def test_korean_captions_are_cut_to_display_size(tmp_path: Path) -> None:
+    events = [
+        {"tStartMs": index * 300, "dDurationMs": 300, "segs": [{"utf8": "그래서우리가"}]}
+        for index in range(20)
+    ]
+    downloader = FakeDownloader(
+        tmp_path,
+        information(manual={"ko-KR": caption_formats("ko")}),
+        {"ko": json.dumps({"events": events})},
+    )
+
+    result = run(options(tmp_path, should_download_video=False), components(downloader))
+
+    lines = cue_texts(result.korean_subtitle_path)
+    assert len(lines) > 1
+    assert all(len(line) <= DISPLAY_LIMITS.hard_characters for line in lines)
+
+
+@pytest.mark.parametrize(
+    ("language", "limits"),
+    [("ko", DISPLAY_LIMITS), ("en", TRANSLATION_LIMITS), ("ja", TRANSLATION_LIMITS)],
+)
+def test_merge_limits_follow_the_source_language(language: str, limits: MergeLimits) -> None:
+    assert cli.merge_limits(language) is limits
+
+
+def cue_texts(path: Path) -> list[str]:
+    return [cue.text for cue in read_srt(path)]
 
 
 def test_empty_source_raises(tmp_path: Path) -> None:

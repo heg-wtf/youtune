@@ -155,10 +155,13 @@ scripts and no network: posters are embedded, every field is escaped, and it is 
    captions `<lang>-orig` → automatic captions `<lang>`. YouTube's machine-translated tracks
    (`tlang=ko`) are skipped because they are heavily rate-limited (HTTP 429). Falls back to
    Whisper when no captions exist.
-2. **Sentence merging** — the word-level timestamps of automatic captions are regrouped into
-   sentences by punctuation, pauses and length. Translating the raw line fragments produces
-   awkward Korean because the word order differs. Over-long sentences are split at the last
-   clause boundary, or near the middle, so no one-word tail is left behind.
+2. **Sentence merging** — the word-level timestamps of automatic captions (and of Whisper
+   speech) are regrouped into sentences by punctuation, pauses, length and duration.
+   Translating the raw line fragments produces awkward Korean because the word order differs.
+   Over-long sentences are split at the last clause boundary, or at the widest pause, so no
+   one-word tail is left behind. Text that is translated keeps sentences up to 140 characters
+   and 10 s; Korean captions and Korean speech, shown as they are, are cut to display size
+   (up to 42 characters and 7 s, closing at 0.7 s pauses).
 3. **Translation** — headless `claude -p --json-schema` calls. Each batch gets the five
    preceding lines as context and is retried up to three times when the returned indexes do
    not match. A line the model folds into the previous one extends that cue's display time.
